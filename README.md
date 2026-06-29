@@ -1,0 +1,2 @@
+# MinIO-Console
+Dashboard Setup
