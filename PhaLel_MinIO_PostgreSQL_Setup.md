@@ -1,10 +1,10 @@
 # PhaLel MinIO + PostgreSQL Setup (Ubuntu 24.04 + Docker Compose)
 
-ဒီ Setup က **One VPS** ပေါ်မှာ **MinIO + PostgreSQL** ကို တစ်ခါတည်း Run ဖို့ ပြင်ထားတဲ့ Version ဖြစ်ပါတယ်။
+This guide explains how to deploy **MinIO** and **PostgreSQL** on a single Ubuntu 24.04 VPS using **Docker Compose**.
 
 ---
 
-## 1. Update Server
+# 1. Update the Server
 
 ```bash
 sudo apt update && sudo apt upgrade -y
@@ -12,7 +12,7 @@ sudo apt update && sudo apt upgrade -y
 
 ---
 
-## 2. Install Docker
+# 2. Install Docker
 
 ```bash
 sudo apt install -y ca-certificates curl gnupg
@@ -27,10 +27,11 @@ $(. /etc/os-release && echo $VERSION_CODENAME) stable" | \
 sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
 
 sudo apt update
+
 sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 ```
 
-Check Docker:
+Verify the installation:
 
 ```bash
 docker --version
@@ -39,96 +40,129 @@ docker compose version
 
 ---
 
-## 3. Create Project Folder
+# 3. Create the Project Directory
 
 ```bash
 sudo mkdir -p /opt/phalel
 cd /opt/phalel
 ```
 
-Create data folders:
+Create the required data directories:
 
 ```bash
-sudo mkdir -p minio-data postgres-data backup
+mkdir -p minio-data postgres-data backup
+```
+
+Project structure:
+
+```text
+/opt/phalel
+├── docker-compose.yml
+├── .env
+├── minio-data/
+├── postgres-data/
+└── backup/
 ```
 
 ---
 
-## 4. Create `.env`
+# 4. Create the Environment File
+
+Create a new environment file:
 
 ```bash
-sudo nano .env
+nano .env
 ```
 
-Paste:
+Paste the following configuration:
 
 ```env
+################################
 # MinIO
+################################
+
 MINIO_ROOT_USER=phaleladmin
 MINIO_ROOT_PASSWORD=ChangeThisStrongPassword123!
 
+################################
 # PostgreSQL
+################################
+
 POSTGRES_DB=phalel_db
 POSTGRES_USER=phalel
 POSTGRES_PASSWORD=ChangeThisStrongPassword123!
 ```
 
-> Password ကို Production မှာ Strong Password ပြောင်းပါ။
+> Replace all default passwords before deploying to production.
 
 ---
 
-## 5. Create `docker-compose.yml`
+# 5. Create docker-compose.yml
+
+Create the Docker Compose file:
 
 ```bash
-sudo nano docker-compose.yml
+nano docker-compose.yml
 ```
 
-Paste:
+Paste the following configuration:
 
 ```yaml
 services:
+
   minio:
     image: minio/minio:latest
     container_name: phalel-minio
-    restart: always
+
+    restart: unless-stopped
+
     ports:
       - "9000:9000"
       - "9001:9001"
+
     env_file:
       - .env
+
     volumes:
       - ./minio-data:/data
+
     command: server /data --console-address ":9001"
 
   postgres:
     image: postgres:16
     container_name: phalel-postgres
-    restart: always
+
+    restart: unless-stopped
+
     ports:
       - "5432:5432"
+
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+
     volumes:
       - ./postgres-data:/var/lib/postgresql/data
 ```
 
+Save the file.
+
 ---
 
-## 6. Start MinIO + PostgreSQL
+# 6. Start the Containers
 
 ```bash
 sudo docker compose up -d
 ```
 
-Check containers:
+Check running containers:
 
 ```bash
 sudo docker ps
 ```
 
-You should see:
+Expected output:
 
 ```text
 phalel-minio
@@ -137,37 +171,47 @@ phalel-postgres
 
 ---
 
-## 7. Open Firewall
+# 7. Configure the Firewall
 
-Testing အတွက်:
+Allow the required ports:
 
 ```bash
 sudo ufw allow 9000
 sudo ufw allow 9001
 sudo ufw allow 5432
+
 sudo ufw enable
 ```
 
-> Production မှာ PostgreSQL port `5432` ကို Public မဖွင့်သင့်ပါ။ Backend နဲ့ Docker Network အတွင်းမှာပဲ သုံးတာ ပိုကောင်းပါတယ်။
+Verify firewall rules:
+
+```bash
+sudo ufw status
+```
+
+> For production deployments, do **not** expose PostgreSQL (5432) to the public internet. Only allow internal access.
 
 ---
 
-## 8. Open MinIO Dashboard
+# 8. Access the MinIO Dashboard
 
-Browser မှာဖွင့်ပါ:
+Open your browser:
 
 ```text
 http://YOUR_SERVER_IP:9001
 ```
 
-Login:
+Login credentials:
 
 ```text
-Username: phaleladmin
-Password: ChangeThisStrongPassword123!
+Username:
+phaleladmin
+
+Password:
+ChangeThisStrongPassword123!
 ```
 
-Create buckets:
+Create the following buckets:
 
 ```text
 phalel-videos
@@ -179,138 +223,212 @@ phalel-backups
 
 ---
 
-## 9. Connect PostgreSQL
+# 9. Connect to PostgreSQL
 
-Correct command:
+Open the PostgreSQL shell:
 
 ```bash
 sudo docker exec -it phalel-postgres psql -U phalel -d phalel_db
 ```
 
-Database list ကြည့်ရန်:
+List databases:
 
 ```sql
 \l
 ```
 
-Current database ထဲက tables ကြည့်ရန်:
+Connect to the database:
+
+```sql
+\c phalel_db
+```
+
+List tables:
 
 ```sql
 \dt
 ```
 
-Exit:
+Show table structure:
+
+```sql
+\d "Video"
+```
+
+Display records:
+
+```sql
+SELECT * FROM "Video";
+```
+
+Count records:
+
+```sql
+SELECT COUNT(*) FROM "Video";
+```
+
+Exit PostgreSQL:
 
 ```sql
 \q
 ```
 
-> Error မဖြစ်အောင် `-d phalel_db` ထည့်ဖို့လိုပါတယ်။ `psql -U phalel` ပဲရေးရင် `phalel` ဆိုတဲ့ database ကိုရှာပြီး မရှိရင် error တက်နိုင်ပါတယ်။
+---
+
+# 10. PostgreSQL Backup
+
+Create a backup:
+
+```bash
+sudo docker exec phalel-postgres \
+pg_dump -U phalel phalel_db \
+> backup/phalel_db_$(date +%F).sql
+```
+
+Restore a backup:
+
+```bash
+cat backup/phalel_db_YYYY-MM-DD.sql | \
+sudo docker exec -i phalel-postgres \
+psql -U phalel -d phalel_db
+```
 
 ---
 
-## 10. PostgreSQL Backup
+# 11. MinIO Backup
 
-Create backup:
-
-```bash
-sudo docker exec phalel-postgres pg_dump -U phalel phalel_db > backup/phalel_db_$(date +%F).sql
-```
-
-Restore backup:
-
-```bash
-cat backup/phalel_db_YYYY-MM-DD.sql | sudo docker exec -i phalel-postgres psql -U phalel -d phalel_db
-```
-
----
-
-## 11. MinIO Backup
-
-Backup MinIO data folder:
+Create a backup:
 
 ```bash
 sudo tar -czf backup/minio_backup_$(date +%F).tar.gz minio-data
 ```
 
-Restore MinIO backup:
+Restore the backup:
 
 ```bash
 sudo docker compose down
+
 sudo rm -rf minio-data
+
 sudo tar -xzf backup/minio_backup_YYYY-MM-DD.tar.gz
+
 sudo docker compose up -d
 ```
 
 ---
 
-## 12. Useful Commands
+# 12. Docker Management Commands
 
-Stop services:
-
-```bash
-sudo docker compose down
-```
-
-Restart services:
+View running containers:
 
 ```bash
-sudo docker compose restart
+sudo docker ps
 ```
 
 View logs:
 
 ```bash
 sudo docker logs phalel-minio
+
 sudo docker logs phalel-postgres
 ```
 
-Remove and restart:
+Restart all services:
+
+```bash
+sudo docker compose restart
+```
+
+Stop all services:
 
 ```bash
 sudo docker compose down
+```
+
+Restart from scratch:
+
+```bash
+sudo docker compose down
+
 sudo docker compose up -d
 ```
 
 ---
 
-## 13. Next.js Connection Example
+# 13. Next.js Environment Configuration
 
-`.env.local`
+## Running Next.js Outside Docker
 
 ```env
 DATABASE_URL="postgresql://phalel:ChangeThisStrongPassword123!@YOUR_SERVER_IP:5432/phalel_db"
 
 MINIO_ENDPOINT=YOUR_SERVER_IP
 MINIO_PORT=9000
+MINIO_USE_SSL=false
+
 MINIO_ACCESS_KEY=phaleladmin
 MINIO_SECRET_KEY=ChangeThisStrongPassword123!
+
 MINIO_BUCKET=phalel-videos
 ```
 
-If Next.js API is running inside Docker, use service names:
+---
+
+## Running Next.js Inside Docker
 
 ```env
 DATABASE_URL="postgresql://phalel:ChangeThisStrongPassword123!@postgres:5432/phalel_db"
 
 MINIO_ENDPOINT=minio
 MINIO_PORT=9000
+MINIO_USE_SSL=false
+
 MINIO_ACCESS_KEY=phaleladmin
 MINIO_SECRET_KEY=ChangeThisStrongPassword123!
+
 MINIO_BUCKET=phalel-videos
 ```
 
 ---
 
-## Final Structure
+# Final Project Structure
 
 ```text
 /opt/phalel
+│
 ├── docker-compose.yml
 ├── .env
+│
 ├── minio-data/
+│
 ├── postgres-data/
+│
 └── backup/
+    ├── phalel_db_2026-06-29.sql
+    └── minio_backup_2026-06-29.tar.gz
 ```
 
-✅ MinIO + PostgreSQL setup completed.
+---
+
+# Services
+
+| Service       | Port |
+| ------------- | ---- |
+| MinIO API     | 9000 |
+| MinIO Console | 9001 |
+| PostgreSQL    | 5432 |
+
+---
+
+# Deployment Complete
+
+You now have a Docker-based environment running:
+
+* ✅ Ubuntu 24.04
+* ✅ Docker Engine
+* ✅ Docker Compose
+* ✅ MinIO Object Storage
+* ✅ PostgreSQL Database
+* ✅ Persistent Data Volumes
+* ✅ Backup Support
+* ✅ Ready for Next.js Integration
