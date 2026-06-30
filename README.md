@@ -1,10 +1,17 @@
-# PhaLel MinIO + PostgreSQL Setup (Ubuntu 24.04 + Docker Compose)
+# PhaLel MinIO + PostgreSQL + Nginx Setup File
 
-This guide explains how to deploy **MinIO** and **PostgreSQL** on a single Ubuntu 24.04 VPS using **Docker Compose**.
+Ubuntu 24.04 + Docker Compose + Nginx + SSL
+
+Example domains:
+
+```text
+MinIO API:     https://storage.example.com
+MinIO Console: https://console.example.com
+```
 
 ---
 
-# 1. Update the Server
+# 1. Update Server
 
 ```bash
 sudo apt update && sudo apt upgrade -y
@@ -31,7 +38,7 @@ sudo apt update
 sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 ```
 
-Verify the installation:
+Check Docker:
 
 ```bash
 docker --version
@@ -40,41 +47,28 @@ docker compose version
 
 ---
 
-# 3. Create the Project Directory
+# 3. Create Project Directory
 
 ```bash
 sudo mkdir -p /opt/phalel
 cd /opt/phalel
 ```
 
-Create the required data directories:
+Create folders:
 
 ```bash
 mkdir -p minio-data postgres-data backup
 ```
 
-Project structure:
-
-```text
-/opt/phalel
-├── docker-compose.yml
-├── .env
-├── minio-data/
-├── postgres-data/
-└── backup/
-```
-
 ---
 
-# 4. Create the Environment File
-
-Create a new environment file:
+# 4. Create `.env`
 
 ```bash
 nano .env
 ```
 
-Paste the following configuration:
+Paste:
 
 ```env
 ################################
@@ -93,19 +87,15 @@ POSTGRES_USER=phalel
 POSTGRES_PASSWORD=ChangeThisStrongPassword123!
 ```
 
-> Replace all default passwords before deploying to production.
-
 ---
 
-# 5. Create docker-compose.yml
-
-Create the Docker Compose file:
+# 5. Create `docker-compose.yml`
 
 ```bash
 nano docker-compose.yml
 ```
 
-Paste the following configuration:
+Paste:
 
 ```yaml
 services:
@@ -113,7 +103,6 @@ services:
   minio:
     image: minio/minio:latest
     container_name: phalel-minio
-
     restart: unless-stopped
 
     ports:
@@ -123,6 +112,10 @@ services:
     env_file:
       - .env
 
+    environment:
+      MINIO_SERVER_URL: "https://storage.example.com"
+      MINIO_BROWSER_REDIRECT_URL: "https://console.example.com"
+
     volumes:
       - ./minio-data:/data
 
@@ -131,7 +124,6 @@ services:
   postgres:
     image: postgres:16
     container_name: phalel-postgres
-
     restart: unless-stopped
 
     ports:
@@ -146,72 +138,192 @@ services:
       - ./postgres-data:/var/lib/postgresql/data
 ```
 
-Save the file.
-
----
-
-# 6. Start the Containers
+Start containers:
 
 ```bash
 sudo docker compose up -d
-```
-
-Check running containers:
-
-```bash
 sudo docker ps
 ```
 
-Expected output:
+---
 
-```text
-phalel-minio
-phalel-postgres
+# 6. Install Nginx
+
+```bash
+sudo apt update
+sudo apt install nginx -y
+```
+
+Remove default Nginx site:
+
+```bash
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo rm -f /etc/nginx/sites-available/default
 ```
 
 ---
 
-# 7. Configure the Firewall
-
-Allow the required ports:
+# 7. Create Nginx Config
 
 ```bash
+sudo nano /etc/nginx/sites-available/minio
+```
+
+Paste:
+
+```nginx
+server {
+    listen 80;
+    server_name storage.example.com;
+
+    client_max_body_size 5G;
+
+    location / {
+        proxy_pass http://127.0.0.1:9000;
+
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        chunked_transfer_encoding off;
+    }
+}
+
+server {
+    listen 80;
+    server_name console.example.com;
+
+    client_max_body_size 5G;
+
+    location / {
+        proxy_pass http://127.0.0.1:9001;
+
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}
+```
+
+Enable Nginx config:
+
+```bash
+sudo ln -s /etc/nginx/sites-available/minio /etc/nginx/sites-enabled/minio
+sudo nginx -t
+sudo systemctl restart nginx
+```
+
+---
+
+# 8. Configure Firewall
+
+```bash
+sudo ufw allow 22
+sudo ufw allow 80
+sudo ufw allow 443
 sudo ufw allow 9000
 sudo ufw allow 9001
 sudo ufw allow 5432
-
 sudo ufw enable
-```
-
-Verify firewall rules:
-
-```bash
 sudo ufw status
 ```
 
-> For production deployments, do **not** expose PostgreSQL (5432) to the public internet. Only allow internal access.
+Production recommendation:
+
+```text
+Do not expose PostgreSQL 5432 publicly.
+Do not expose MinIO 9000 and 9001 publicly if Nginx is already configured.
+```
+
+For production, use:
+
+```bash
+sudo ufw delete allow 5432
+sudo ufw delete allow 9000
+sudo ufw delete allow 9001
+```
 
 ---
 
-# 8. Access the MinIO Dashboard
+# 9. Install SSL Certificate
 
-Open your browser:
-
-```text
-http://YOUR_SERVER_IP:9001
-```
-
-Login credentials:
+Make sure DNS A records are already pointed to your VPS IP:
 
 ```text
-Username:
-phaleladmin
-
-Password:
-ChangeThisStrongPassword123!
+storage.example.com → YOUR_VPS_IP
+console.example.com → YOUR_VPS_IP
 ```
 
-Create the following buckets:
+Install Certbot:
+
+```bash
+sudo apt install certbot python3-certbot-nginx -y
+```
+
+Create SSL certificate:
+
+```bash
+sudo certbot --nginx \
+-d storage.example.com \
+-d console.example.com
+```
+
+Reload Nginx:
+
+```bash
+sudo systemctl reload nginx
+```
+
+Check certificates:
+
+```bash
+sudo certbot certificates
+```
+
+---
+
+# 10. Restart MinIO + PostgreSQL
+
+```bash
+cd /opt/phalel
+
+sudo docker compose down
+sudo docker compose up -d
+sudo docker ps
+```
+
+---
+
+# 11. Access MinIO
+
+MinIO API:
+
+```text
+https://storage.example.com
+```
+
+MinIO Console:
+
+```text
+https://console.example.com
+```
+
+Login:
+
+```text
+Username: phaleladmin
+Password: ChangeThisStrongPassword123!
+```
+
+Create buckets:
 
 ```text
 phalel-videos
@@ -223,61 +335,27 @@ phalel-backups
 
 ---
 
-# 9. Connect to PostgreSQL
-
-Open the PostgreSQL shell:
+# 12. Connect PostgreSQL
 
 ```bash
 sudo docker exec -it phalel-postgres psql -U phalel -d phalel_db
 ```
 
-List databases:
+PostgreSQL commands:
 
 ```sql
 \l
-```
-
-Connect to the database:
-
-```sql
 \c phalel_db
-```
-
-List tables:
-
-```sql
 \dt
-```
-
-Show table structure:
-
-```sql
-\d "Video"
-```
-
-Display records:
-
-```sql
-SELECT * FROM "Video";
-```
-
-Count records:
-
-```sql
 SELECT COUNT(*) FROM "Video";
-```
-
-Exit PostgreSQL:
-
-```sql
 \q
 ```
 
 ---
 
-# 10. PostgreSQL Backup
+# 13. PostgreSQL Backup
 
-Create a backup:
+Create backup:
 
 ```bash
 sudo docker exec phalel-postgres \
@@ -285,7 +363,7 @@ pg_dump -U phalel phalel_db \
 > backup/phalel_db_$(date +%F).sql
 ```
 
-Restore a backup:
+Restore backup:
 
 ```bash
 cat backup/phalel_db_YYYY-MM-DD.sql | \
@@ -295,15 +373,15 @@ psql -U phalel -d phalel_db
 
 ---
 
-# 11. MinIO Backup
+# 14. MinIO Backup
 
-Create a backup:
+Create backup:
 
 ```bash
 sudo tar -czf backup/minio_backup_$(date +%F).tar.gz minio-data
 ```
 
-Restore the backup:
+Restore backup:
 
 ```bash
 sudo docker compose down
@@ -317,76 +395,84 @@ sudo docker compose up -d
 
 ---
 
-# 12. Docker Management Commands
+# 15. Next.js Environment Example
 
-View running containers:
+For Next.js running outside Docker:
+
+```env
+DATABASE_URL="postgresql://phalel:ChangeThisStrongPassword123!@YOUR_SERVER_IP:5432/phalel_db"
+
+MINIO_ENDPOINT=storage.example.com
+MINIO_PORT=443
+MINIO_USE_SSL=true
+
+MINIO_ACCESS_KEY=phaleladmin
+MINIO_SECRET_KEY=ChangeThisStrongPassword123!
+
+MINIO_BUCKET=phalel-videos
+```
+
+For Next.js running inside Docker:
+
+```env
+DATABASE_URL="postgresql://phalel:ChangeThisStrongPassword123!@postgres:5432/phalel_db"
+
+MINIO_ENDPOINT=storage.example.com
+MINIO_PORT=443
+MINIO_USE_SSL=true
+
+MINIO_ACCESS_KEY=phaleladmin
+MINIO_SECRET_KEY=ChangeThisStrongPassword123!
+
+MINIO_BUCKET=phalel-videos
+```
+
+---
+
+# 16. Useful Commands
+
+Check Docker containers:
 
 ```bash
 sudo docker ps
 ```
 
-View logs:
+Check MinIO logs:
 
 ```bash
 sudo docker logs phalel-minio
+```
 
+Check PostgreSQL logs:
+
+```bash
 sudo docker logs phalel-postgres
 ```
 
-Restart all services:
+Check Nginx config:
 
 ```bash
+sudo nginx -t
+```
+
+Restart Nginx:
+
+```bash
+sudo systemctl restart nginx
+```
+
+Restart Docker services:
+
+```bash
+cd /opt/phalel
 sudo docker compose restart
 ```
 
-Stop all services:
+Stop Docker services:
 
 ```bash
+cd /opt/phalel
 sudo docker compose down
-```
-
-Restart from scratch:
-
-```bash
-sudo docker compose down
-
-sudo docker compose up -d
-```
-
----
-
-# 13. Next.js Environment Configuration
-
-## Running Next.js Outside Docker
-
-```env
-DATABASE_URL="postgresql://phalel:ChangeThisStrongPassword123!@YOUR_SERVER_IP:5432/phalel_db"
-
-MINIO_ENDPOINT=YOUR_SERVER_IP
-MINIO_PORT=9000
-MINIO_USE_SSL=false
-
-MINIO_ACCESS_KEY=phaleladmin
-MINIO_SECRET_KEY=ChangeThisStrongPassword123!
-
-MINIO_BUCKET=phalel-videos
-```
-
----
-
-## Running Next.js Inside Docker
-
-```env
-DATABASE_URL="postgresql://phalel:ChangeThisStrongPassword123!@postgres:5432/phalel_db"
-
-MINIO_ENDPOINT=minio
-MINIO_PORT=9000
-MINIO_USE_SSL=false
-
-MINIO_ACCESS_KEY=phaleladmin
-MINIO_SECRET_KEY=ChangeThisStrongPassword123!
-
-MINIO_BUCKET=phalel-videos
 ```
 
 ---
@@ -395,40 +481,37 @@ MINIO_BUCKET=phalel-videos
 
 ```text
 /opt/phalel
-│
 ├── docker-compose.yml
 ├── .env
-│
 ├── minio-data/
-│
 ├── postgres-data/
-│
 └── backup/
-    ├── phalel_db_2026-06-29.sql
-    └── minio_backup_2026-06-29.tar.gz
 ```
 
 ---
 
 # Services
 
-| Service       | Port |
-| ------------- | ---- |
-| MinIO API     | 9000 |
-| MinIO Console | 9001 |
-| PostgreSQL    | 5432 |
+| Service | URL / Port |
+|---|---|
+| MinIO API | https://storage.example.com |
+| MinIO Console | https://console.example.com |
+| PostgreSQL | 5432 |
+| Nginx HTTP | 80 |
+| Nginx HTTPS | 443 |
 
 ---
 
 # Deployment Complete
 
-You now have a Docker-based environment running:
+You now have:
 
-* ✅ Ubuntu 24.04
-* ✅ Docker Engine
-* ✅ Docker Compose
-* ✅ MinIO Object Storage
-* ✅ PostgreSQL Database
-* ✅ Persistent Data Volumes
-* ✅ Backup Support
-* ✅ Ready for Next.js Integration
+- Ubuntu 24.04
+- Docker Engine
+- Docker Compose
+- MinIO Object Storage
+- PostgreSQL Database
+- Nginx Reverse Proxy
+- SSL Certificate
+- Backup Support
+- Next.js Ready Configuration
